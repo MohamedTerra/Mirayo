@@ -3,18 +3,42 @@ import { Package, History, Plus, Minus, RotateCcw, ShoppingBag, Trash2, Edit2, T
 
 const API_URL = 'https://sheetdb.io/api/v1/s0nk41xn5f3ez';
 
+interface InventoryItem {
+  SKU: string;
+  Name: string;
+  Category: string;
+  Color: string;
+  Size: string;
+  Price: number;
+  Stock: number;
+}
+
+interface Transaction {
+  ID: string;
+  Date: string;
+  SKU: string;
+  Type: 'sale' | 'return';
+  Quantity: number;
+  TotalValue: number;
+}
+
+interface ActionModalState {
+  isOpen: boolean;
+  type: 'sale' | 'return' | null;
+  item: InventoryItem | null;
+}
+
 export default function App() {
-  const [items, setItems] = useState([]);
-  const [transactions, setTransactions] = useState([]);
-  const [activeTab, setActiveTab] = useState('inventory');
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [activeTab, setActiveTab] = useState<'inventory' | 'history'>('inventory');
   const [isLoading, setIsLoading] = useState(true);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState(null);
-  const [actionModal, setActionModal] = useState({ isOpen: false, type: null, item: null });
+  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
+  const [actionModal, setActionModal] = useState<ActionModalState>({ isOpen: false, type: null, item: null });
 
-  // Fetch Data from Google Sheets via SheetDB
   const fetchData = async () => {
     setIsLoading(true);
     try {
@@ -26,13 +50,27 @@ export default function App() {
       const inventoryData = await inventoryRes.json();
       const txData = await txRes.json();
 
-      // Ensure numbers are parsed correctly from strings
-      setItems(inventoryData.map(item => ({
-        ...item,
-        Price: Number(item.Price) || 0,
-        Stock: Number(item.Stock) || 0
-      })));
-      setTransactions(txData);
+      if (inventoryData.error) {
+        console.error("SheetDB Error (Inventory):", inventoryData.error);
+        setItems([]);
+      } else if (Array.isArray(inventoryData)) {
+        setItems(inventoryData.map((item: any) => ({
+          ...item,
+          Price: Number(item.Price) || 0,
+          Stock: Number(item.Stock) || 0
+        })));
+      }
+
+      if (txData.error) {
+        console.error("SheetDB Error (Transactions):", txData.error);
+        setTransactions([]);
+      } else if (Array.isArray(txData)) {
+        setTransactions(txData.map((tx: any) => ({
+          ...tx,
+          Quantity: Number(tx.Quantity) || 0,
+          TotalValue: Number(tx.TotalValue) || 0
+        })));
+      }
     } catch (error) {
       console.error("Error fetching data:", error);
     } finally {
@@ -44,15 +82,15 @@ export default function App() {
     fetchData();
   }, []);
 
-  const handleAddItem = async (e) => {
+  const handleAddItem = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.target);
+    const formData = new FormData(e.currentTarget);
     const newItem = {
-      SKU: formData.get('sku'),
-      Name: formData.get('name'),
-      Category: formData.get('category'),
-      Color: formData.get('color'),
-      Size: formData.get('size'),
+      SKU: formData.get('sku') as string,
+      Name: formData.get('name') as string,
+      Category: formData.get('category') as string,
+      Color: formData.get('color') as string,
+      Size: formData.get('size') as string,
       Price: Number(formData.get('price')),
       Stock: Number(formData.get('stock')),
     };
@@ -70,20 +108,21 @@ export default function App() {
     }
   };
 
-  const handleEditItem = async (e) => {
+  const handleEditItem = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.target);
+    if (!editingItem) return;
+
+    const formData = new FormData(e.currentTarget);
     const updatedFields = {
-      Name: formData.get('name'),
-      Category: formData.get('category'),
-      Color: formData.get('color'),
-      Size: formData.get('size'),
+      Name: formData.get('name') as string,
+      Category: formData.get('category') as string,
+      Color: formData.get('color') as string,
+      Size: formData.get('size') as string,
       Price: Number(formData.get('price')),
       Stock: Number(formData.get('stock')),
     };
 
     try {
-      // Patch requires targeting the specific column to find the row
       await fetch(`${API_URL}/SKU/${editingItem.SKU}?sheet=Inventory`, {
         method: 'PATCH',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
@@ -97,7 +136,7 @@ export default function App() {
     }
   };
 
-  const handleDeleteItem = async (sku) => {
+  const handleDeleteItem = async (sku: string) => {
     if (window.confirm('Are you sure you want to delete this item?')) {
       try {
         await fetch(`${API_URL}/SKU/${sku}?sheet=Inventory`, {
@@ -111,9 +150,11 @@ export default function App() {
     }
   };
 
-  const handleTransaction = async (e) => {
+  const handleTransaction = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.target);
+    if (!actionModal.item || !actionModal.type) return;
+
+    const formData = new FormData(e.currentTarget);
     const quantity = Number(formData.get('quantity'));
     const { type, item } = actionModal;
 
@@ -135,14 +176,12 @@ export default function App() {
     };
 
     try {
-      // 1. Update Inventory Stock
       await fetch(`${API_URL}/SKU/${item.SKU}?sheet=Inventory`, {
         method: 'PATCH',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({ data: { Stock: newStock } })
       });
 
-      // 2. Log Transaction
       await fetch(`${API_URL}?sheet=Transactions`, {
         method: 'POST',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
@@ -156,7 +195,6 @@ export default function App() {
     }
   };
 
-  // Stats Calculations
   const stats = useMemo(() => {
     return transactions.reduce((acc, tx) => {
       const qty = Number(tx.Quantity) || 0;
@@ -182,7 +220,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
             <ShoppingBag size={28} className="text-[#a4b494]" />
-            <h1 className="text-3xl font-serif tracking-wide text-[#f4efe9]">Mirayo</h1>
+            <h1 className="text-3xl font-serif tracking-wide text-[#f4efe9]">mirayo</h1>
           </div>
           
           <div className="flex bg-[#1a261a] p-1 rounded-xl">
@@ -260,7 +298,7 @@ export default function App() {
                     </tr>
                   ))}
                   {items.length === 0 && (
-                    <tr><td colSpan="6" className="px-6 py-8 text-center text-gray-500">No items in inventory. Add a new model to start.</td></tr>
+                    <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-500">No items in inventory. Add a new model to start.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -314,7 +352,7 @@ export default function App() {
                     </tr>
                   ))}
                   {transactions.length === 0 && (
-                    <tr><td colSpan="5" className="px-6 py-8 text-center text-gray-500">No transactions recorded yet.</td></tr>
+                    <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">No transactions recorded yet.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -323,8 +361,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Modals for Add, Edit, and Action (Sale/Return) go here - keeping them simple for standard HTML forms */}
-      
       {(isAddModalOpen || isEditModalOpen) && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
@@ -344,49 +380,3 @@ export default function App() {
                 <input name="category" defaultValue={editingItem?.Category} required className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg" /></div>
                 <div><label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
                 <input name="color" defaultValue={editingItem?.Color} required className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg" /></div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div><label className="block text-sm font-medium text-gray-700 mb-1">Size</label>
-                <input name="size" defaultValue={editingItem?.Size} required className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg" /></div>
-                <div><label className="block text-sm font-medium text-gray-700 mb-1">Price ($)</label>
-                <input name="price" type="number" step="0.01" defaultValue={editingItem?.Price} required className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg" /></div>
-                <div><label className="block text-sm font-medium text-gray-700 mb-1">Stock Qty</label>
-                <input name="stock" type="number" defaultValue={editingItem?.Stock} required className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg" /></div>
-              </div>
-
-              <div className="pt-4 flex gap-3">
-                <button type="button" onClick={() => {setIsAddModalOpen(false); setIsEditModalOpen(false);}} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">Cancel</button>
-                <button type="submit" className="flex-1 px-4 py-2.5 bg-[#2c3f2d] text-white rounded-lg hover:bg-[#1a261a]">Save Item</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {actionModal.isOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className={`px-6 py-4 flex justify-between items-center ${actionModal.type === 'sale' ? 'bg-green-600' : 'bg-orange-500'}`}>
-              <h3 className="text-lg font-bold text-white">Log {actionModal.type === 'sale' ? 'Sale' : 'Return'}</h3>
-            </div>
-            <form onSubmit={handleTransaction} className="p-6">
-              <div className="mb-4">
-                <p className="text-sm text-gray-500">Item: <span className="font-bold text-gray-800">{actionModal.item.Name} ({actionModal.item.SKU})</span></p>
-                <p className="text-sm text-gray-500">Current Stock: <span className="font-bold text-gray-800">{actionModal.item.Stock}</span></p>
-              </div>
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Quantity {actionModal.type === 'sale' ? 'Sold' : 'Returned'}</label>
-                <input name="quantity" type="number" min="1" max={actionModal.type === 'sale' ? actionModal.item.Stock : undefined} required className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg text-lg font-bold text-center" defaultValue="1" />
-              </div>
-              <div className="flex gap-3">
-                <button type="button" onClick={() => setActionModal({ isOpen: false, type: null, item: null })} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">Cancel</button>
-                <button type="submit" className={`flex-1 px-4 py-2.5 text-white rounded-lg font-medium ${actionModal.type === 'sale' ? 'bg-green-600 hover:bg-green-700' : 'bg-orange-500 hover:bg-orange-600'}`}>Confirm</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
